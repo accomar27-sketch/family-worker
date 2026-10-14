@@ -1,0 +1,78 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner() {
+      return signedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email == 'acc.omar27@gmail.com';
+    }
+    function me() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function approved() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && me().status == 'approved';
+    }
+
+    // حسابات المستخدمين
+    match /users/{uid} {
+      allow read: if isOwner() || (signedIn() && request.auth.uid == uid);
+      // إنشاء الحساب: المالك يُعتمد تلقائيًا، وغيره ينتظر الموافقة
+      allow create: if signedIn() && request.auth.uid == uid && (
+        (isOwner() && request.resource.data.status == 'approved' && request.resource.data.role == 'owner')
+        || (request.resource.data.status == 'pending' && request.resource.data.role == 'member'
+            && !('memberName' in request.resource.data))
+      );
+      // المستخدم يحدّث بياناته الظاهرة فقط، لا الحالة ولا الدور
+      allow update: if isOwner()
+        || (signedIn() && request.auth.uid == uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'photo', 'lastSeen']));
+      allow delete: if isOwner();
+    }
+
+    // دليل المعتمدين (أسماء فقط) — للقراءة بين الأعضاء
+    match /directory/{uid} {
+      allow read: if approved();
+      allow write: if isOwner();
+    }
+
+    match /family/{doc} {
+      allow read: if approved();
+      allow write: if isOwner();
+    }
+    match /assets/{doc} {
+      allow read: if approved();
+      allow write: if isOwner();
+    }
+
+    // الختمات
+    match /khatmas/{id} {
+      allow read: if approved();
+      allow create: if approved() && request.resource.data.createdBy == request.auth.uid;
+      allow update: if approved()
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.title == resource.data.title;
+      allow delete: if isOwner();
+    }
+
+    // الإشعارات: المستلم فقط يقرأ؛ أي معتمد يرسل باسمه
+    match /notifications/{id} {
+      allow read: if signedIn() && resource.data.to == request.auth.uid;
+      allow create: if approved() && request.resource.data.from == request.auth.uid
+        && request.resource.data.keys().hasAll(['to', 'kind', 'title', 'body', 'createdAt']);
+      allow update: if signedIn() && resource.data.to == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt']);
+    }
+
+    // أجهزة التنبيه: كل مستخدم يسجّل جهازه فقط
+    match /devices/{token} {
+      allow create: if approved() && request.resource.data.uid == request.auth.uid;
+      allow delete: if approved() && resource.data.uid == request.auth.uid;
+      allow read, update: if false;
+    }
+
+    // سجل تنبيهات المناسبات: للعامل فقط (الخادم يتجاوز القواعد)
+    match /reminderLog/{id} { allow read, write: if false; }
+  }
+}
