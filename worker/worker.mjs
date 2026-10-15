@@ -89,7 +89,22 @@ async function push() {
   return sent;
 }
 
-const steps = { occasions, khatmas, ownerPending, push };
+// حذف الإشعارات القديمة: المقروءة بعد 30 يومًا، وأي إشعار (حتى غير المقروء) بعد 90 يومًا
+async function cleanup() {
+  const DAY = 864e5, c30 = new Date(Date.now() - 30 * DAY).toISOString(), c90 = new Date(Date.now() - 90 * DAY).toISOString();
+  let n = 0;
+  for (const [field, cut] of [['readAt', c30], ['createdAt', c90]]) {
+    for (;;) {
+      const snap = await db.collection('notifications').where(field, '<', cut).limit(400).get();
+      if (snap.empty) break;
+      const b = db.batch(); snap.docs.forEach((d) => b.delete(d.ref)); await b.commit(); n += snap.size;
+      if (snap.size < 400) break;
+    }
+  }
+  return n;
+}
+
+const steps = { occasions, khatmas, ownerPending, push, cleanup };
 for (const [name, fn] of Object.entries(steps)) {
   try { console.log(name, await fn()); } catch (e) { console.error(name, 'failed:', e.message); process.exitCode = 1; }
 }
