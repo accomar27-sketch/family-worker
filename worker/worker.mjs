@@ -2,6 +2,7 @@
 // ١) تنبيهات المناسبات  ٢) إنهاء دعوات الختمة المنتهية  ٣) إشعار المالك بالطلبات الجديدة  ٤) إرسال الدفع.
 import admin from 'firebase-admin';
 import * as K from '../public/js/lib/khatma-logic.js';
+import * as C from '../public/js/lib/counters.js';
 import * as O from '../public/js/lib/occasions.js';
 import { planReminders } from './plan.mjs';
 
@@ -45,11 +46,30 @@ async function khatmas() {
     let notes = [];
     const done = await db.runTransaction(async (t) => {
       const cur = (await t.get(d.ref)).data();
-      const r = cur && K.finalizeInvitation(cur);
+      if (!cur) return false;
+      let r = K.finalizeInvitation(cur);
+      if (!r) r = K.reminders(cur);
       if (!r) return false;
       t.set(d.ref, r.khatma); notes = r.notes; return true;
     });
     if (done) { await writeNotes(notes); n++; }
+  }
+  return n;
+}
+
+async function counters() {
+  let n = 0;
+  const snap = await db.collection('counters').get();
+  if (snap.empty) return 0;
+  const ids = (await directory()).map((d) => d.uid || d.id);
+  for (const d of snap.docs) {
+    const c = d.data(); if (c.closedAt || c.notified100) continue;
+    const parts = (await db.collection('counterParts').where('counterId', '==', d.id).get()).docs.map((x) => x.data());
+    const r = C.thresholdNotes(c, C.totalOf(parts));
+    if (!Object.keys(r.patch).length) continue;
+    await d.ref.update(r.patch);
+    await writeNotes(r.notes.flatMap((nn) => ids.map((to) => ({ ...nn, to }))));
+    n++;
   }
   return n;
 }
@@ -78,7 +98,7 @@ async function push() {
     if (tokens.length) {
       const res = await admin.messaging().sendEachForMulticast({
         tokens,
-        data: { title: String(n.title), body: String(n.body).slice(0, 400), url: './?go=' + (n.kind === 'admin' ? 'ap' : n.kind.startsWith('khatma') ? 'kh' : 'nt'), tag: d.id },
+        data: { title: String(n.title), body: String(n.body).slice(0, 400), url: './?go=' + (n.kind === 'admin' ? 'ap' : n.kind.startsWith('khatma') ? 'kh' : n.kind === 'dhikr' ? 'zk' : 'nt'), tag: d.id },
         webpush: { headers: { Urgency: 'high', TTL: '86400' } },
       });
       await Promise.all(res.responses.map((r, i) => (!r.success && /not-registered|invalid-registration|invalid-argument/.test(r.error?.code || '') ? db.doc('devices/' + tokens[i]).delete() : null)));
@@ -104,7 +124,7 @@ async function cleanup() {
   return n;
 }
 
-const steps = { occasions, khatmas, ownerPending, push, cleanup };
+const steps = { occasions, khatmas, counters, ownerPending, push, cleanup };
 for (const [name, fn] of Object.entries(steps)) {
   try { console.log(name, await fn()); } catch (e) { console.error(name, 'failed:', e.message); process.exitCode = 1; }
 }
