@@ -1,0 +1,27 @@
+name: welcome-once
+# تشغيل يدوي فقط (Run workflow). الأسماء تُكتب عند التشغيل لا في الكود لأن المستودع عام.
+on:
+  workflow_dispatch:
+    inputs:
+      people:
+        description: 'الأسماء بالترتيب: اسم:f للمؤنث أو اسم:m للمذكر (يمكن اسم|عبارة:f)'
+        required: true
+      dry_run:
+        description: 'تجربة بلا إرسال (true) أو إرسال فعلي (false)'
+        required: true
+        default: 'true'
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: worker/package.json }
+      - run: npm install --no-audit --no-fund
+        working-directory: worker
+      - run: node worker/welcome.mjs
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          WELCOME_PEOPLE: ${{ inputs.people }}
+          DRY_RUN: ${{ inputs.dry_run }}
